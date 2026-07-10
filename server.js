@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
+const dns = require('dns'); // نیٹ ورکنگ لیول ہینڈلنگ کے لیے
 require('dotenv').config();
 
 const app = express();
@@ -9,23 +10,27 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ریلوے ہیلتھ چیک روٹ
+// ریلوے ہیلتھ چیک روٹ (تاکہ سرور آن لائن رہے)
 app.get('/', (req, res) => {
   res.status(200).send("Nasirify Backend is Live and Running!");
 });
 
-// جی میل ٹرانسپورٹر (براہ راست گوگل کے IPv4 ایڈریس کا استعمال)
+// جی میل ٹرانسپورٹر کا کلاؤڈ ہوسٹنگ کے لیے حتمی سیٹ اپ
 const transporter = nodemailer.createTransport({
-  host: '74.125.142.108', // یہ 'smtp.gmail.com' کا آفیشل IPv4 ایڈریس ہے (یہ IPv6 کو بائی پاس کرے گا)
-  port: 465, // پورٹ 465 کا استعمال کریں
-  secure: true, // پورٹ 465 کے لیے true ہونا ضروری ہے
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // پورٹ 587 کے لیے ہمیشہ false ہوتا ہے
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS // ریلوے انوائرمنٹ ویریبلز والا App Password
+    pass: process.env.EMAIL_PASS // آپ کا 16 ہندسوں کا گوگل ایپ پاس ورڈ
   },
   tls: {
-    servername: 'smtp.gmail.com', // ایس ایس ایل سرٹیفکیٹ کی تصدیق کے لیے یہ لائن لازمی ہے
     rejectUnauthorized: false
+  },
+  // یہ جادوئی لائن ریلوے کے IPv6 ایرر (ENETUNREACH) کو بائی پاس کرے گی
+  lookup: (hostname, options, callback) => {
+    options.family = 4; // نوڈ جے ایس کو صرف IPv4 استعمال کرنے پر مجبور کریں
+    dns.lookup(hostname, options, callback);
   }
 });
 
