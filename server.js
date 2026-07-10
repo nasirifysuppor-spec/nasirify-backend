@@ -39,15 +39,16 @@ app.post('/api/send-otp', async (req, res) => {
   console.log(`🔐 OTP for ${normalizedEmail} is: [ ${otpCode} ]`);
   console.log(`---------------------------------\n`);
 
-  // EmailJS REST API کے لیے ڈیٹا پے لوڈ
+  // ✅ EmailJS REST API ڈیٹا پے لوڈ (آپ کے ٹیمپلیٹ کے ویری ایبلز کے مطابق فکسڈ)
   const emailJsData = {
     service_id: process.env.EMAILJS_SERVICE_ID,
     template_id: process.env.EMAILJS_TEMPLATE_ID,
     user_id: process.env.EMAILJS_PUBLIC_KEY, 
     template_params: {
-      to_email: normalizedEmail,
+      email: normalizedEmail,       // ٹرانسمیٹ ہوگا ٹیمپلیٹ کے {{email}} میں
+      passcode: otpCode,            // ٹرانسمیٹ ہوگا ٹیمپلیٹ کے {{passcode}} میں
       user_name: name || 'Nasirify User',
-      otp_code: otpCode
+      time: "5 Minutes"             // ٹرانسمیٹ ہوگا ٹیمپلیٹ کے {{time}} میں
     }
   };
 
@@ -103,7 +104,7 @@ app.post('/api/verify-otp', (req, res) => {
   }
 });
 
-// ✅ ریلوے (Railway) کے لیے '0.0.0.0' ہوسٹ پر بائنڈ کرنا لازمی ہے
+// ریلوے (Railway) کے لیے '0.0.0.0' ہوسٹ پر بائنڈ کرنا لازمی ہے
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Security server running smoothly on port ${PORT}`);
