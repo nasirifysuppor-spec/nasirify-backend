@@ -1,7 +1,12 @@
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
+const dns = require('dns'); // نیٹ ورک ڈومین ہینڈلنگ کے لیے
 require('dotenv').config();
+
+// نوڈ جے ایس کو مجبور کریں کہ وہ IPv6 کے بجائے IPv4 ایڈریسز کو ترجیح دے
+// اس سے ریلوے سرور پر آنے والا ENETUNREACH ایرر مکمل ختم ہو جائے گا
+dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
@@ -9,12 +14,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// جی میل ٹرانسپورٹر کا سیٹ اپ
+// جی میل ٹرانسپورٹر کا نیا اور محفوظ سیٹ آپ (پورٹ 587)
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // پورٹ 587 کے لیے ہمیشہ false ہوتا ہے
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+    pass: process.env.EMAIL_PASS // یہاں ریلوے میں آپ کا 16 ہندسوں کا App Password ہونا ضروری ہے
+  },
+  tls: {
+    rejectUnauthorized: false // کلاؤڈ سرورز پر کنکشن کو بلاک ہونے سے روکتا ہے
   }
 });
 
@@ -23,30 +33,32 @@ const otpStore = {};
 
 // 1️⃣ او ٹی پی جنریٹ اور سینڈ کرنے کا API
 app.post('/api/send-otp', async (req, res) => {
-  const { email, name } = req.body;
+  const { email, name, otp } = req.body; // فرنٹ اینڈ سے اگر او ٹی پی آ رہا ہے تو اسے بھی ہینڈل کر لیا
   if (!email) return res.status(400).json({ error: "ای میل درج کرنا ضروری ہے" });
 
-  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+  // اگر موبائل ایپ نے خود او ٹی پی بھیجا ہے تو وہ استعمال کریں، ورنہ نیا جنریٹ کریں
+  const otpCode = otp || Math.floor(100000 + Math.random() * 900000).toString();
+  const normalizedEmail = email.toLowerCase().trim();
   
-  otpStore[email.toLowerCase().trim()] = {
+  otpStore[normalizedEmail] = {
     otp: otpCode,
     expiresAt: Date.now() + 5 * 60 * 1000 // 5 منٹ کی ویلیڈٹی
   };
 
   const mailOptions = {
     from: process.env.EMAIL_USER,
-    to: email,
+    to: normalizedEmail,
     subject: 'Nasirify Network - Registration OTP',
-    text: `السلام علیکم ${name || 'یوزر'}!\n\nNasirify نیٹ ورک پر رجسٹریشن کے لیے آپ کا ویریفیکیشن کوڈ یہ ہے: ${otpCode}\n\nیہ کوڈ سیکیورٹی وجوہات کی بنا پر صرف 5 منٹ تک کام کرے گا۔`
+    text: `السلام علیکم ${name || 'یوزر'}!\n\nNasirify نیٹ ورک پر لاگ ان / رجسٹریشن کے لیے آپ کا ویریفیکیشن کوڈ یہ ہے: ${otpCode}\n\nیہ کوڈ سیکیورٹی وجوہات کی بنا پر صرف 5 منٹ تک کام کرے گا۔`
   };
 
   try {
     await transporter.sendMail(mailOptions);
-    console.log(`OTP sent successfully to ${email}`);
+    console.log(`🚀 OTP sent successfully to ${normalizedEmail}`);
     res.status(200).json({ success: true, message: "OTP sent securely!" });
   } catch (error) {
     console.error("Email Error:", error);
-    res.status(500).json({ error: "ای میل بھیجنے میں سرور پر مسئلہ ہوا ہے۔" });
+    res.status(500).json({ error: "ای میل بھیجنے میں سرور پر مسئلہ ہوا ہے۔", details: error.message });
   }
 });
 
