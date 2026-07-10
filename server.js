@@ -1,30 +1,25 @@
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
-const dns = require('dns'); // نیٹ ورک ڈومین ہینڈلنگ کے لیے
 require('dotenv').config();
-
-// نوڈ جے ایس کو مجبور کریں کہ وہ IPv6 کے بجائے IPv4 ایڈریسز کو ترجیح دے
-// اس سے ریلوے سرور پر آنے والا ENETUNREACH ایرر مکمل ختم ہو جائے گا
-dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
-// CORS کو اس طرح سیٹ کریں تاکہ موبائل ایپ کنیکٹ ہو سکے
+// CORS سیٹ اپ تاکہ موبائل ایپ بغیر کسی مسئلے کے ڈیٹا بھیج اور وصول کر سکے
 app.use(cors());
 app.use(express.json());
 
-// جی میل ٹرانسپورٹر کا نیا اور محفوظ سیٹ آپ (پورٹ 587)
+// جی میل ٹرانسپورٹر کا سیٹ اپ (پورٹ 587 - ریلوے اور کلاؤڈ ہوسٹنگ کے لیے بالکل محفوظ)
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
-  secure: false, // پورٹ 587 کے لیے ہمیشہ false ہوتا ہے
+  secure: false, // پورٹ 587 کے لیے ہمیشہ false رکھنا ضروری ہے
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS // یہاں ریلوے میں آپ کا 16 ہندسوں کا App Password ہونا ضروری ہے
+    pass: process.env.EMAIL_PASS // ریلوے Variables میں آپ کا 16 ہندسوں کا گوگل App Password ہونا چاہیے
   },
   tls: {
-    rejectUnauthorized: false // کلاؤڈ سرورز پر کنکشن کو بلاک ہونے سے روکتا ہے
+    rejectUnauthorized: false // کلاؤڈ ہوسٹنگ پر کنکشن بلاک یا فیل ہونے سے روکتا ہے
   }
 });
 
@@ -33,7 +28,7 @@ const otpStore = {};
 
 // 1️⃣ او ٹی پی جنریٹ اور سینڈ کرنے کا API
 app.post('/api/send-otp', async (req, res) => {
-  const { email, name, otp } = req.body; // فرنٹ اینڈ سے اگر او ٹی پی آ رہا ہے تو اسے بھی ہینڈل کر لیا
+  const { email, name, otp } = req.body;
   if (!email) return res.status(400).json({ error: "ای میل درج کرنا ضروری ہے" });
 
   // اگر موبائل ایپ نے خود او ٹی پی بھیجا ہے تو وہ استعمال کریں، ورنہ نیا جنریٹ کریں
@@ -48,7 +43,7 @@ app.post('/api/send-otp', async (req, res) => {
   const mailOptions = {
     from: process.env.EMAIL_USER,
     to: normalizedEmail,
-    subject: 'Nasirify Network - Registration OTP',
+    subject: 'Nasirify Network - Login OTP',
     text: `السلام علیکم ${name || 'یوزر'}!\n\nNasirify نیٹ ورک پر لاگ ان / رجسٹریشن کے لیے آپ کا ویریفیکیشن کوڈ یہ ہے: ${otpCode}\n\nیہ کوڈ سیکیورٹی وجوہات کی بنا پر صرف 5 منٹ تک کام کرے گا۔`
   };
 
@@ -86,6 +81,8 @@ app.post('/api/verify-otp', (req, res) => {
   }
 });
 
-// سرور پورٹ رن کرنا
+// سرور پورٹ رن کرنا - '0.0.0.0' لازمی ہے تاکہ ریلوے کا ہیلتھ چیک سسٹم کامیابی سے کنیکٹ رہے
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Security server is fully loaded on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Security server is fully loaded on port ${PORT}`);
+});
