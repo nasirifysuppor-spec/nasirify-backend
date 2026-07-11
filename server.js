@@ -10,15 +10,22 @@ dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
-// 🟢 FIREBASE ADMIN SDK INITIALIZATION
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
-    })
-  });
+// 🟢 FIREBASE ADMIN SDK INITIALIZATION (CRASH FIX)
+// یہاں پچھلا کریش فکس کیا گیا ہے: اگر admin.apps لوڈ نہ ہو تو یہ کریش نہیں ہوگا
+if (!admin.apps || admin.apps.length === 0) {
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        // Private key میں لائن بریکس (\n) کا فکس
+        privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+      })
+    });
+    console.log("🔥 Firebase Admin Initialized Successfully.");
+  } catch (initError) {
+    console.error("❌ Firebase Initialization Error:", initError.message);
+  }
 }
 const db = admin.firestore();
 
@@ -37,7 +44,7 @@ const otpStore = {};
 // 🔒 FINGERPRINT VERIFICATION FUNCTION (Server-to-Server)
 async function verifyFingerprintToken(requestId, clientVisitorId) {
   if (!requestId || !clientVisitorId || clientVisitorId === "unknown" || requestId === "unknown") {
-    // اگر لوکل ہوسٹ یا ٹیسٹنگ موڈ ہے اور انوائرنمنٹ پروڈکشن نہیں ہے تو بائی پاس الاؤ کریں
+    // اگر لوکل ہوسٹ یا ٹیسٹنگ موڈ ہے تو بائی پاس کی اجازت دیں
     if (process.env.NODE_ENV !== 'production') return true;
     return false;
   }
