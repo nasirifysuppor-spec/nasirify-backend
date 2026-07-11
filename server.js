@@ -21,10 +21,44 @@ app.use(express.json());
 // عارضی OTP اسٹوریج
 const otpStore = {};
 
+// 🔒 FINGERPRINT VERIFICATION FUNCTION (Server-to-Server)
+async function verifyFingerprintToken(requestId, clientVisitorId) {
+  if (!requestId || !clientVisitorId) return false;
+
+  try {
+    const secretKey = process.env.FINGERPRINT_SECRET_KEY;
+    // FingerprintJS Pro Server API call
+    const response = await axios.get(`https://api.fpjs.io/events/${requestId}`, {
+      headers: { 'Auth-API-Key': secretKey }
+    });
+
+    if (response.status === 200 && response.data.products?.identification?.data) {
+      const serverVisitorId = response.data.products.identification.data.visitorId;
+      
+      // Mobile app نے جو visitorId بھیجا اور جو Fingerprint سرور سے آیا، دونوں کا میچ ہونا لازمی ہے
+      if (serverVisitorId === clientVisitorId) {
+        return true; 
+      }
+    }
+    return false;
+  } catch (error) {
+    console.error("❌ Fingerprint Server Validation Error:", error.message);
+    return false; // کسی بھی ایرر کی صورت میں بائی پاس بلاک کریں
+  }
+}
+
 // 1️⃣ او ٹی پی جنریٹ اور EmailJS کے ذریعے سینڈ کرنے کا API
 app.post('/api/send-otp', async (req, res) => {
-  const { email, name, otp } = req.body; 
+  // ✅ اب ہم کلائنٹ سے requestId اور visitorId بھی وصول کریں گے
+  const { email, name, otp, requestId, visitorId } = req.body; 
   if (!email) return res.status(400).json({ error: "ای میل درج کرنا ضروری ہے" });
+
+  // 🛡️ SECURITY STEP: سرور سائیڈ فنگر پرنٹ چیک
+  const isDeviceValid = await verifyFingerprintToken(requestId, visitorId);
+  if (!isDeviceValid) {
+    console.log(`🚨 Security Alert: Unauthorized device bypass attempt blocked for ${email}`);
+    return res.status(403).json({ success: false, message: "سیکیورٹی الرٹ: غیر مجاز ڈیوائس یا بائی پاس کی کوشش بلاک کر دی گئی ہے۔" });
+  }
 
   const otpCode = otp || Math.floor(100000 + Math.random() * 900000).toString();
   const normalizedEmail = email.toLowerCase().trim();
@@ -39,7 +73,7 @@ app.post('/api/send-otp', async (req, res) => {
   console.log(`🔐 OTP for ${normalizedEmail} is: [ ${otpCode} ]`);
   console.log(`---------------------------------\n`);
 
-  // ✅ EmailJS REST API ڈیٹا پے لوڈ (آپ کے ٹیمپلیٹ کے ویری ایبلز کے مطابق فکسڈ)
+  // ✅ EmailJS REST API ڈیٹا پے لوڈ
   const emailJsData = {
     service_id: process.env.EMAILJS_SERVICE_ID,
     template_id: process.env.EMAILJS_TEMPLATE_ID,
@@ -53,7 +87,6 @@ app.post('/api/send-otp', async (req, res) => {
   };
 
   try {
-    // Axios کا استعمال کرتے ہوئے EmailJS کو ڈیٹا بھیجنا
     const response = await axios.post('https://api.emailjs.com/api/v1.0/email/send', emailJsData, {
       headers: { 'Content-Type': 'application/json' }
     });
@@ -66,10 +99,7 @@ app.post('/api/send-otp', async (req, res) => {
     }
 
   } catch (error) {
-    // اگر ای میل فیل بھی ہو جائے تو تفصیلی ایرر لاگ کریں
     console.error("❌ EmailJS Error Details:", error.response ? error.response.data : error.message);
-    
-    // کلاؤڈ پر لاگ میں دکھانے کے بعد بھی رسپانس کامیابی کا بھیجیں تاکہ ٹیسٹنگ نہ رکے
     console.log("⚠️ EmailJS failed! But continuing test via server logs OTP...");
     return res.status(200).json({ success: true, message: "OTP generated (Check server logs)!" });
   }
