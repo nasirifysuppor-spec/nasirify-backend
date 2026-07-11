@@ -4,12 +4,12 @@ const dns = require('dns');
 const axios = require('axios');
 require('dotenv').config();
 
-// IPv4 کو ترجیح دینے کے لیے (نیٹ ورک کے مسائل سے بچنے کے لیے)
+// IPv4 ko tarjih dene ke liye (Network routing issues se bachne ke liye)
 dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
-// CORS کنفیگریشن - تمام اوریجنز کو الاؤ کرنا تاکہ موبائل ایپ بلاک نہ ہو
+// CORS Configuration - Sabhi origins allowed hain taake mobile app block na ho
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST'],
@@ -18,7 +18,7 @@ app.use(cors({
 
 app.use(express.json());
 
-// عارضی OTP اسٹوریج
+// Temporary OTP Storage
 const otpStore = {};
 
 // 🔒 FINGERPRINT VERIFICATION FUNCTION (Server-to-Server)
@@ -26,34 +26,35 @@ async function verifyFingerprintToken(requestId, clientVisitorId) {
   if (!requestId || !clientVisitorId) return false;
 
   try {
-    const secretKey = process.env.FINGERPRINT_SECRET_KEY;
-    // FingerprintJS Pro Server API call
-    const response = await axios.get(`https://api.fpjs.io/events/${requestId}`, {
+    const secretKey = process.env.FINGERPRINT_SECRET_KEY; // Railway me save ki hui Secret Key (sk_...)
+    
+    // 🌍 CRITICAL REGION UPDATE: Aapke 'ap' region ke liye specific server endpoint
+    const response = await axios.get(`https://ap.api.fpjs.io/events/${requestId}`, {
       headers: { 'Auth-API-Key': secretKey }
     });
 
     if (response.status === 200 && response.data.products?.identification?.data) {
       const serverVisitorId = response.data.products.identification.data.visitorId;
       
-      // Mobile app نے جو visitorId بھیجا اور جو Fingerprint سرور سے آیا، دونوں کا میچ ہونا لازمی ہے
+      // Mobile app ki visitorId aur Fingerprint server se aayi ID ka match hona zaroori hai
       if (serverVisitorId === clientVisitorId) {
         return true; 
       }
     }
     return false;
   } catch (error) {
-    console.error("❌ Fingerprint Server Validation Error:", error.message);
-    return false; // کسی بھی ایرر کی صورت میں بائی پاس بلاک کریں
+    // Agar region ya key me masla hoga to exact detail console me dikhegi
+    console.error("❌ Fingerprint Server Validation Error:", error.response ? error.response.data : error.message);
+    return false; 
   }
 }
 
-// 1️⃣ او ٹی پی جنریٹ اور EmailJS کے ذریعے سینڈ کرنے کا API
+// 1️⃣ OTP Generate aur EmailJS ke zariye send karne ka API
 app.post('/api/send-otp', async (req, res) => {
-  // ✅ اب ہم کلائنٹ سے requestId اور visitorId بھی وصول کریں گے
   const { email, name, otp, requestId, visitorId } = req.body; 
   if (!email) return res.status(400).json({ error: "ای میل درج کرنا ضروری ہے" });
 
-  // 🛡️ SECURITY STEP: سرور سائیڈ فنگر پرنٹ چیک
+  // 🛡️ SECURITY STEP: Server-side fingerprint checking
   const isDeviceValid = await verifyFingerprintToken(requestId, visitorId);
   if (!isDeviceValid) {
     console.log(`🚨 Security Alert: Unauthorized device bypass attempt blocked for ${email}`);
@@ -65,24 +66,23 @@ app.post('/api/send-otp', async (req, res) => {
   
   otpStore[normalizedEmail] = {
     otp: otpCode,
-    expiresAt: Date.now() + 5 * 60 * 1000 // 5 منٹ کی ویلیڈٹی
+    expiresAt: Date.now() + 5 * 60 * 1000 // 5 Minutes Validity
   };
 
-  // سرور لاگز میں او ٹی پی چیک کرنے کے لیے
   console.log(`\n---------------------------------`);
   console.log(`🔐 OTP for ${normalizedEmail} is: [ ${otpCode} ]`);
   console.log(`---------------------------------\n`);
 
-  // ✅ EmailJS REST API ڈیٹا پے لوڈ
+  // EmailJS REST API payload
   const emailJsData = {
     service_id: process.env.EMAILJS_SERVICE_ID,
     template_id: process.env.EMAILJS_TEMPLATE_ID,
     user_id: process.env.EMAILJS_PUBLIC_KEY, 
     template_params: {
-      email: normalizedEmail,       // ٹرانسمیٹ ہوگا ٹیمپلیٹ کے {{email}} میں
-      passcode: otpCode,            // ٹرانسمیٹ ہوگا ٹیمپلیٹ کے {{passcode}} میں
+      email: normalizedEmail,       
+      passcode: otpCode,            
       user_name: name || 'Nasirify User',
-      time: "5 Minutes"             // ٹرانسمیٹ ہوگا ٹیمپلیٹ کے {{time}} میں
+      time: "5 Minutes"             
     }
   };
 
@@ -100,12 +100,18 @@ app.post('/api/send-otp', async (req, res) => {
 
   } catch (error) {
     console.error("❌ EmailJS Error Details:", error.response ? error.response.data : error.message);
-    console.log("⚠️ EmailJS failed! But continuing test via server logs OTP...");
+    
+    // PRODUCTION FIX: Live app me fail hone par user ko error response bhejna zaroori hai
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(500).json({ success: false, message: "ای میل سروس میں خرابی کی وجہ سے OTP نہیں بھیجا جا سکا۔" });
+    }
+    
+    // Localhost / Dev mode test backup ke liye logs ka option default rakha hai
     return res.status(200).json({ success: true, message: "OTP generated (Check server logs)!" });
   }
 });
 
-// 2️⃣ او ٹی پی ویریفائی کرنے کا API
+// 2️⃣ OTP Verify karne ka API
 app.post('/api/verify-otp', (req, res) => {
   const { email, otpEnteredByUser } = req.body;
   
@@ -134,8 +140,8 @@ app.post('/api/verify-otp', (req, res) => {
   }
 });
 
-// ریلوے (Railway) کے لیے '0.0.0.0' ہوسٹ پر بائنڈ کرنا لازمی ہے
+// Railway (0.0.0.0 binding mandatory)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Security server running smoothly on port ${PORT}`);
+  console.log(`🚀 Security server running smoothly on port ${PORT} [Region: AP]`);
 });
