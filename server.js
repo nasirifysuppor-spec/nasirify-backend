@@ -2,14 +2,27 @@ const express = require('express');
 const cors = require('cors');
 const dns = require('dns');
 const axios = require('axios');
+const admin = require('firebase-admin');
 require('dotenv').config();
 
-// IPv4 ko tarjih dene ke liye (Network routing issues se bachne ke liye)
+// IPv4 کو ترجیح دینے کے لیے
 dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
-// CORS Configuration - Sabhi origins allowed hain taake mobile app block na ho
+// 🟢 FIREBASE ADMIN SDK INITIALIZATION
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+    })
+  });
+}
+const db = admin.firestore();
+
+// CORS Configuration
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST'],
@@ -23,103 +36,179 @@ const otpStore = {};
 
 // 🔒 FINGERPRINT VERIFICATION FUNCTION (Server-to-Server)
 async function verifyFingerprintToken(requestId, clientVisitorId) {
-  if (!requestId || !clientVisitorId) return false;
+  if (!requestId || !clientVisitorId || clientVisitorId === "unknown" || requestId === "unknown") {
+    // اگر لوکل ہوسٹ یا ٹیسٹنگ موڈ ہے اور انوائرنمنٹ پروڈکشن نہیں ہے تو بائی پاس الاؤ کریں
+    if (process.env.NODE_ENV !== 'production') return true;
+    return false;
+  }
 
   try {
-    const secretKey = process.env.FINGERPRINT_SECRET_KEY; // Railway me save ki hui Secret Key (sk_...)
+    const secretKey = process.env.FINGERPRINT_SECRET_KEY; 
     
-    // 🌍 CRITICAL REGION UPDATE: Aapke 'ap' region ke liye specific server endpoint
     const response = await axios.get(`https://ap.api.fpjs.io/events/${requestId}`, {
       headers: { 'Auth-API-Key': secretKey }
     });
 
     if (response.status === 200 && response.data.products?.identification?.data) {
       const serverVisitorId = response.data.products.identification.data.visitorId;
-      
-      // Mobile app ki visitorId aur Fingerprint server se aayi ID ka match hona zaroori hai
       if (serverVisitorId === clientVisitorId) {
         return true; 
       }
     }
     return false;
   } catch (error) {
-    // Agar region ya key me masla hoga to exact detail console me dikhegi
     console.error("❌ Fingerprint Server Validation Error:", error.response ? error.response.data : error.message);
     return false; 
   }
 }
 
-// 1️⃣ OTP Generate aur EmailJS ke zariye send karne ka API
-app.post('/api/send-otp', async (req, res) => {
-  const { email, name, otp, requestId, visitorId } = req.body; 
-  if (!email) return res.status(400).json({ error: "ای میل درج کرنا ضروری ہے" });
+// 🛰️ 1️⃣ لاگ ان گیٹ وے اور سیکیورٹی چیک API
+app.post('/api/verify-login', async (req, res) => {
+  const { email, uid, deviceId, platform, osVersion, isGoogleLogin, displayName, requestId } = req.body;
+  const adminEmail = process.env.ADMIN_EMAIL;
 
-  // 🛡️ SECURITY STEP: Server-side fingerprint checking
-  const isDeviceValid = await verifyFingerprintToken(requestId, visitorId);
-  if (!isDeviceValid) {
-    console.log(`🚨 Security Alert: Unauthorized device bypass attempt blocked for ${email}`);
-    return res.status(403).json({ success: false, message: "سیکیورٹی الرٹ: غیر مجاز ڈیوائس یا بائی پاس کی کوشش بلاک کر دی گئی ہے۔" });
+  if (!email || !uid) {
+    return res.status(400).json({ status: "error", message: "کریڈنشلز ادھورے ہیں۔" });
   }
 
-  const otpCode = otp || Math.floor(100000 + Math.random() * 900000).toString();
-  const normalizedEmail = email.toLowerCase().trim();
-  
-  otpStore[normalizedEmail] = {
-    otp: otpCode,
-    expiresAt: Date.now() + 5 * 60 * 1000 // 5 Minutes Validity
-  };
-
-  console.log(`\n---------------------------------`);
-  console.log(`🔐 OTP for ${normalizedEmail} is: [ ${otpCode} ]`);
-  console.log(`---------------------------------\n`);
-
-  // EmailJS REST API payload
-  const emailJsData = {
-    service_id: process.env.EMAILJS_SERVICE_ID,
-    template_id: process.env.EMAILJS_TEMPLATE_ID,
-    user_id: process.env.EMAILJS_PUBLIC_KEY, 
-    template_params: {
-      email: normalizedEmail,       
-      passcode: otpCode,            
-      user_name: name || 'Nasirify User',
-      time: "5 Minutes"             
-    }
-  };
-
   try {
-    const response = await axios.post('https://api.emailjs.com/api/v1.0/email/send', emailJsData, {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    const normalizedEmail = email.toLowerCase().trim();
+    const currentDevice = deviceId || "unknown";
 
-    if (response.status === 200) {
-      console.log(`🚀 OTP sent successfully via EmailJS to ${normalizedEmail}`);
-      return res.status(200).json({ success: true, message: "OTP sent via EmailJS!" });
-    } else {
-      throw new Error(`EmailJS responded with status: ${response.status}`);
+    // 🔥 سیکیورٹی چیک 1: ڈیوائس بلاک لسٹ ٹیسٹ
+    if (currentDevice !== "unknown") {
+      const blockSnap = await db.collection('blocked_devices').doc(currentDevice).get();
+      if (blockSnap.exists()) {
+        return res.status(403).json({ status: "blocked", message: "یہ ڈیوائس بلاک کر دی گئی ہے۔" });
+      }
     }
 
-  } catch (error) {
-    console.error("❌ EmailJS Error Details:", error.response ? error.response.data : error.message);
-    
-    // PRODUCTION FIX: Live app me fail hone par user ko error response bhejna zaroori hai
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(500).json({ success: false, message: "ای میل سروس میں خرابی کی وجہ سے OTP نہیں بھیجا جا سکا۔" });
+    // ⭐ بائی پاس چیک: ایڈمن بائی پاس لاک
+    if (adminEmail && normalizedEmail === adminEmail.toLowerCase().trim()) {
+      console.log(`👑 Admin Access Granted Server-Side For: ${normalizedEmail}`);
+      return res.status(200).json({ status: "admin_passed" });
     }
+
+    // 🔥 سیکیورٹی چیک 2: سرور سائیڈ فنگر پرنٹ ویریفکیشن
+    const isDeviceGenuine = await verifyFingerprintToken(requestId, currentDevice);
+    if (!isDeviceGenuine) {
+      console.log(`🚨 Hack Alert: Fake fingerprint request blocked for ${normalizedEmail}`);
+      return res.status(403).json({ status: "invalid_fingerprint", message: "سیکیورٹی الرٹ: ڈیوائس ٹوکن غیر مصدقہ ہے۔" });
+    }
+
+    // فائر اسٹور سے یوزر ڈیٹا نکالیں
+    const userRef = db.collection('users').doc(uid);
+    let userSnap = await userRef.get();
+
+    // اگر گوگل سائن ان سے نیا یوزر ہے تو رجسٹر کریں
+    if (!userSnap.exists() && isGoogleLogin) {
+      const defaultData = {
+        uid,
+        name: displayName || "Google User",
+        email: normalizedEmail,
+        role: "buyer",
+        deviceIds: currentDevice !== "unknown" ? [currentDevice] : [],
+        isVerified: false,
+        createdAt: new Date().toISOString()
+      };
+      await userRef.set(defaultData);
+      return res.status(200).json({ status: "under_review" });
+    }
+
+    if (!userSnap.exists()) {
+      return res.status(404).json({ status: "not_found", message: "یوزر ریکارڈ ڈیٹا بیس میں موجود نہیں ہے۔" });
+    }
+
+    const userData = userSnap.data();
+
+    // 🔥 سیکیورٹی چیک 3: یوزر ویریفکیشن اسٹیٹس چیک
+    if (userData.isVerified === false) {
+      return res.status(200).json({ status: "under_review" });
+    }
+
+    // 🔥 سیکیورٹی چیک 4: ڈیوائس مس میچ پروٹیکشن
+    if (userData.deviceIds && userData.deviceIds.length > 0 && currentDevice !== "unknown" && !userData.deviceIds.includes(currentDevice)) {
+      
+      // مشکوک لاگ ان لاگ کریں
+      await db.collection('suspicious_hack_attempts').add({
+        email: normalizedEmail,
+        deviceId: currentDevice,
+        status: "mismatch",
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        platform: platform || "unknown",
+        osVersion: osVersion || "unknown"
+      });
+
+      // ڈیوائس فیلڈ اٹیمپٹس کاؤنٹ کریں
+      const attemptsSnap = await db.collection('login_attempts').where('deviceId', '==', currentDevice).get();
+      const hacksSnap = await db.collection('suspicious_hack_attempts').where('deviceId', '==', currentDevice).get();
+      const totalFailures = attemptsSnap.size + hacksSnap.size;
+
+      if (totalFailures >= 4) {
+        await db.collection('blocked_devices').doc(currentDevice).set({
+          blockedEmail: normalizedEmail,
+          reason: "Exceeded 4 unauthorized device mismatch attempts",
+          blockedAt: admin.firestore.FieldValue.serverTimestamp(),
+          deviceDetails: { platform, osVersion }
+        });
+        return res.status(403).json({ status: "blocked", message: "بار بار کوششوں کی وجہ سے ڈیوائس بلاک ہو گئی۔" });
+      }
+
+      return res.status(401).json({ status: "mismatch", message: "یہ اکاؤنٹ کسی دوسری ڈیوائس پر رجسٹرڈ ہے۔" });
+    }
+
+    // 🌟 تمام چیکس پاس: او ٹی پی جنریشن فلو
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
     
-    // Localhost / Dev mode test backup ke liye logs ka option default rakha hai
-    return res.status(200).json({ success: true, message: "OTP generated (Check server logs)!" });
+    otpStore[normalizedEmail] = {
+      otp: otpCode,
+      expiresAt: Date.now() + 5 * 60 * 1000
+    };
+
+    console.log(`🔐 Generated OTP for ${normalizedEmail} -> [ ${otpCode} ]`);
+
+    const emailJsData = {
+      service_id: process.env.EMAILJS_SERVICE_ID,
+      template_id: process.env.EMAILJS_TEMPLATE_ID,
+      user_id: process.env.EMAILJS_PUBLIC_KEY, 
+      template_params: {
+        email: normalizedEmail,       
+        passcode: otpCode,            
+        user_name: userData.name || 'Nasirify User',
+        time: "5 Minutes"             
+      }
+    };
+
+    try {
+      await axios.post('https://api.emailjs.com/api/v1.0/email/send', emailJsData, {
+        headers: { 'Content-Type': 'application/json' }
+      });
+      console.log(`🚀 OTP successfully sent to ${normalizedEmail}`);
+    } catch (emailError) {
+      console.error("❌ EmailJS Delivery Error:", emailError.message);
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(500).json({ status: "error", message: "ای میل سروس فیل ہونے کی وجہ سے او ٹی پی نہیں بھیجا جا سکا۔" });
+      }
+    }
+
+    return res.status(200).json({ status: "otp_required", role: userData.role || 'buyer' });
+
+  } catch (err) {
+    console.error("🔥 Server Gate Failure:", err);
+    return res.status(500).json({ status: "error", message: "انٹرنل سرور سیکیورٹی گیٹ ایرر۔" });
   }
 });
 
-// 2️⃣ OTP Verify karne ka API
-app.post('/api/verify-otp', (req, res) => {
-  const { email, otpEnteredByUser } = req.body;
+// 2️⃣ OTP Verify کرنے اور لاگ ان ہسٹری بنانے کا API
+app.post('/api/verify-otp', async (req, res) => {
+  const { email, otpEnteredByUser, uid, deviceId, platform, osVersion } = req.body;
   
   if (!email || !otpEnteredByUser) {
     return res.status(400).json({ success: false, message: "ای میل اور او ٹی پی دونوں ضروری ہیں" });
   }
 
   const userEmail = email.toLowerCase().trim();
+  const currentDevice = deviceId || "unknown";
 
   if (!otpStore[userEmail]) {
     return res.status(400).json({ success: false, message: "پہلے او ٹی پی کوڈ کی درخواست کریں" });
@@ -134,13 +223,69 @@ app.post('/api/verify-otp', (req, res) => {
 
   if (otpEnteredByUser.toString().trim() === otp.toString().trim()) {
     delete otpStore[userEmail]; 
-    return res.status(200).json({ success: true, message: "Verified!" });
+
+    try {
+      const historyRef = db.collection("login_history");
+      const sessionDoc = await historyRef.add({
+        uid: uid,
+        email: userEmail,
+        deviceId: currentDevice,
+        loginAt: admin.firestore.FieldValue.serverTimestamp(),
+        logoutAt: null,
+        platform: platform || "unknown",
+        osVersion: osVersion || "unknown"
+      });
+
+      await db.collection('login_attempts').add({
+        email: userEmail,
+        deviceId: currentDevice,
+        status: "success",
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      return res.status(200).json({ 
+        success: true, 
+        message: "Verified!", 
+        sessionId: sessionDoc.id 
+      });
+
+    } catch (dbError) {
+      console.error("Error creating login session doc:", dbError);
+      return res.status(200).json({ success: true, message: "Verified but history log failed." });
+    }
+
   } else {
+    if (currentDevice !== "unknown") {
+      await db.collection('login_attempts').add({
+        email: userEmail,
+        deviceId: currentDevice,
+        status: "failed",
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
     return res.status(400).json({ success: false, message: "غلط او ٹی پی کوڈ درج کیا گیا ہے" });
   }
 });
 
-// Railway (0.0.0.0 binding mandatory)
+// 🔄 3️⃣ لاگ آؤٹ اور سیشن ختم کرنے کا API
+app.post('/api/logout', async (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId) return res.status(400).json({ success: false, message: "سیشن آئی ڈی ضروری ہے۔" });
+
+  try {
+    const sessionRef = db.collection("login_history").doc(sessionId);
+    await sessionRef.update({
+      logoutAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return res.status(200).json({ success: true, message: "Logged out successfully from server!" });
+  } catch (err) {
+    console.error("❌ Server Logout Error:", err.message);
+    return res.status(500).json({ success: false, message: "لاگ آؤٹ اپڈیٹ کرنے میں ناکامی۔" });
+  }
+});
+
+// Railway Config
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Security server running smoothly on port ${PORT} [Region: AP]`);
