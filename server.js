@@ -12,25 +12,23 @@ dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
-// 🟢 FIREBASE ADMIN SDK INITIALIZATION (CRASH FIX)
-if (!admin.apps || admin.apps.length === 0) {
-  try {
+// 🟢 FIREBASE ADMIN SDK INITIALIZATION (SAFE FIX)
+let db;
+try {
+  if (!admin.apps || admin.apps.length === 0) {
     admin.initializeApp({
       credential: admin.credential.cert({
         projectId: process.env.FIREBASE_PROJECT_ID,
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        // Private key میں لائن بریکس (\n) کا فکس
         privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
       })
     });
     console.log("🔥 Firebase Admin Initialized Successfully.");
-  } catch (initError) {
-    console.error("❌ Firebase Initialization Error:", initError.message);
   }
+  db = getFirestore();
+} catch (initError) {
+  console.error("❌ Firebase Initialization Error:", initError.message);
 }
-
-// 👑 Firestore initialize karne ka naya aur sahi tareeqa
-const db = getFirestore();
 
 // CORS Configuration
 app.use(cors({
@@ -47,14 +45,12 @@ const otpStore = {};
 // 🔒 FINGERPRINT VERIFICATION FUNCTION (Server-to-Server)
 async function verifyFingerprintToken(requestId, clientVisitorId) {
   if (!requestId || !clientVisitorId || clientVisitorId === "unknown" || requestId === "unknown") {
-    // اگر لوکل ہوسٹ یا ٹیسٹنگ موڈ ہے تو بائی پاس کی اجازت دیں
     if (process.env.NODE_ENV !== 'production') return true;
     return false;
   }
 
   try {
     const secretKey = process.env.FINGERPRINT_SECRET_KEY; 
-    
     const response = await axios.get(`https://ap.api.fpjs.io/events/${requestId}`, {
       headers: { 'Auth-API-Key': secretKey }
     });
@@ -85,7 +81,18 @@ app.post('/api/verify-login', async (req, res) => {
     const normalizedEmail = email.toLowerCase().trim();
     const currentDevice = deviceId || "unknown";
 
-    // 🔥 سیکیورٹی چیک 1: ڈیوائس بلاک لسٹ ٹیسٹ
+    // 👑 ⭐ ADMIN VIP BYPASS (SAB SE OOPAR)
+    // اگر ای میل ایڈمن کی ہے تو تمام سیکیورٹی فلٹرز اور او ٹی پی کو بائی پاس کر دیا جائے
+    if (adminEmail && normalizedEmail === adminEmail.toLowerCase().trim()) {
+      console.log(`👑 VIP Admin Access Granted Server-Side For: ${normalizedEmail}`);
+      return res.status(200).json({ status: "admin_passed", role: "admin" });
+    }
+
+    if (!db) {
+      return res.status(500).json({ status: "error", message: "ڈیٹا بیس کنکشن دستیاب نہیں ہے۔" });
+    }
+
+    // 🔥 سیکیورٹی چیک 1: ڈیوائس بلاک لسٹ ٹیسٹ (صرف عام صارفین کے لیے)
     if (currentDevice !== "unknown") {
       const blockSnap = await db.collection('blocked_devices').doc(currentDevice).get();
       if (blockSnap.exists()) {
@@ -93,13 +100,7 @@ app.post('/api/verify-login', async (req, res) => {
       }
     }
 
-    // ⭐ بائی پاس چیک: ایڈمن بائی پاس لاک
-    if (adminEmail && normalizedEmail === adminEmail.toLowerCase().trim()) {
-      console.log(`👑 Admin Access Granted Server-Side For: ${normalizedEmail}`);
-      return res.status(200).json({ status: "admin_passed" });
-    }
-
-    // 🔥 سیکیورٹی چیک 2: سرور سائیڈ فنگر پرنٹ ویریفکیشن
+    // 🔥 سیکیورٹی چیک 2: سرور سائیڈ فنگر پرنٹ ویریفکیشن (صرف عام صارفین کے لیے)
     const isDeviceGenuine = await verifyFingerprintToken(requestId, currentDevice);
     if (!isDeviceGenuine) {
       console.log(`🚨 Hack Alert: Fake fingerprint request blocked for ${normalizedEmail}`);
@@ -139,7 +140,6 @@ app.post('/api/verify-login', async (req, res) => {
     // 🔥 سیکیورٹی چیک 4: ڈیوائس مس میچ پروٹیکشن
     if (userData.deviceIds && userData.deviceIds.length > 0 && currentDevice !== "unknown" && !userData.deviceIds.includes(currentDevice)) {
       
-      // مشکوک لاگ ان لاگ کریں
       await db.collection('suspicious_hack_attempts').add({
         email: normalizedEmail,
         deviceId: currentDevice,
@@ -149,7 +149,6 @@ app.post('/api/verify-login', async (req, res) => {
         osVersion: osVersion || "unknown"
       });
 
-      // ڈیوائس فیلڈ اٹیمپٹس کاؤنٹ کریں
       const attemptsSnap = await db.collection('login_attempts').where('deviceId', '==', currentDevice).get();
       const hacksSnap = await db.collection('suspicious_hack_attempts').where('deviceId', '==', currentDevice).get();
       const totalFailures = attemptsSnap.size + hacksSnap.size;
@@ -167,7 +166,7 @@ app.post('/api/verify-login', async (req, res) => {
       return res.status(401).json({ status: "mismatch", message: "یہ اکاؤنٹ کسی دوسری ڈیوائس پر رجسٹرڈ ہے۔" });
     }
 
-    // 🌟 تمام چیکس پاس: او ٹی پی جنریشن فلو
+    // 🌟 تمام چیکس پاس: او ٹی پی جنریشن فلو (صرف عام صارفین کے لیے)
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
     
     otpStore[normalizedEmail] = {
@@ -235,6 +234,7 @@ app.post('/api/verify-otp', async (req, res) => {
     delete otpStore[userEmail]; 
 
     try {
+      if (!db) throw new Error("Database not initialized");
       const historyRef = db.collection("login_history");
       const sessionDoc = await historyRef.add({
         uid: uid,
@@ -265,7 +265,7 @@ app.post('/api/verify-otp', async (req, res) => {
     }
 
   } else {
-    if (currentDevice !== "unknown") {
+    if (currentDevice !== "unknown" && db) {
       await db.collection('login_attempts').add({
         email: userEmail,
         deviceId: currentDevice,
@@ -284,6 +284,7 @@ app.post('/api/logout', async (req, res) => {
   if (!sessionId) return res.status(400).json({ success: false, message: "سیشن آئی ڈی ضروری ہے۔" });
 
   try {
+    if (!db) throw new Error("Database not initialized");
     const sessionRef = db.collection("login_history").doc(sessionId);
     await sessionRef.update({
       logoutAt: admin.firestore.FieldValue.serverTimestamp()
