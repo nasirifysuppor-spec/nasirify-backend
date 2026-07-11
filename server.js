@@ -3,6 +3,8 @@ const cors = require('cors');
 const dns = require('dns');
 const axios = require('axios');
 const admin = require('firebase-admin');
+// 👑 Firestore ko naye standard tareeqay se import kiya
+const { getFirestore } = require('firebase-admin/firestore'); 
 require('dotenv').config();
 
 // IPv4 کو ترجیح دینے کے لیے
@@ -11,7 +13,6 @@ dns.setDefaultResultOrder('ipv4first');
 const app = express();
 
 // 🟢 FIREBASE ADMIN SDK INITIALIZATION (CRASH FIX)
-// یہاں پچھلا کریش فکس کیا گیا ہے: اگر admin.apps لوڈ نہ ہو تو یہ کریش نہیں ہوگا
 if (!admin.apps || admin.apps.length === 0) {
   try {
     admin.initializeApp({
@@ -27,7 +28,9 @@ if (!admin.apps || admin.apps.length === 0) {
     console.error("❌ Firebase Initialization Error:", initError.message);
   }
 }
-const db = admin.firestore();
+
+// 👑 Firestore initialize karne ka naya aur sahi tareeqa
+const db = getFirestore();
 
 // CORS Configuration
 app.use(cors({
