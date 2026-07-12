@@ -2,14 +2,30 @@ const express = require('express');
 const cors = require('cors');
 const dns = require('dns');
 const axios = require('axios');
-const admin = require('firebase-admin'); // Firebase Admin shamil kiya
+const admin = require('firebase-admin');
 require('dotenv').config();
 
-// Firebase initialize
+// Firebase initialization (Railway aur Local dono ke liye safe)
 if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.applicationDefault()
-  });
+  try {
+    // Agar environment variables set hain to unka use karein
+    if (process.env.FIREBASE_PROJECT_ID) {
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined
+        })
+      });
+    } else {
+      // Local development ke liye default
+      admin.initializeApp({
+        credential: admin.credential.applicationDefault()
+      });
+    }
+  } catch (error) {
+    console.error("❌ Firebase Initialization Error:", error);
+  }
 }
 const db = admin.firestore();
 
@@ -174,7 +190,7 @@ app.post('/api/verify-otp', async (req, res) => {
   }
 });
 
-// 🛡️ Naya Security Check Endpoint (Yahan add kiya gaya hai)
+// 🛡️ Security Check Endpoint
 app.post('/api/check-security', async (req, res) => {
   const { deviceId, email } = req.body;
   try {
