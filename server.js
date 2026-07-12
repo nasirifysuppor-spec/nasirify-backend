@@ -195,16 +195,26 @@ app.post('/api/verify-otp', async (req, res) => {
 // 🛡️ Security Check Endpoint
 app.post('/api/check-security', async (req, res) => {
   const { deviceId, email } = req.body;
-  // [UPDATE] Check if db is initialized before usage
   if (!db) return res.status(500).json({ isAllowed: false, message: "DB Error" });
   
   try {
-    const q = db.collection("users").where("deviceId", "==", deviceId).limit(1);
-    const snapshot = await q.get();
-    if (!snapshot.empty) return res.status(200).json({ isAllowed: false, message: "اس ڈیوائس پر اکاؤنٹ موجود ہے۔" });
+    // 1. ڈیوائس کا ڈپلیکیٹ چیک
+    const deviceSnapshot = await db.collection("users").where("deviceId", "==", deviceId).limit(1).get();
+    if (!deviceSnapshot.empty) return res.status(200).json({ isAllowed: false, message: "اس ڈیوائس پر پہلے سے اکاؤنٹ موجود ہے۔" });
+
+    // 2. بلاک لسٹ چیک (banned_devices کلیکشن)
+    const bannedRef = await db.collection("banned_devices").doc(deviceId).get();
+    if (bannedRef.exists) return res.status(403).json({ isAllowed: false, message: "سیکیورٹی وجوہات کی بنا پر اس ڈیوائس پر پابندی ہے۔" });
+
+    // 3. ای میل کا ڈپلیکیٹ چیک
+    if (email) {
+      const emailSnapshot = await db.collection("users").where("email", "==", email.toLowerCase().trim()).get();
+      if (!emailSnapshot.empty) return res.status(200).json({ isAllowed: false, message: "اس ای میل پر پہلے سے اکاؤنٹ موجود ہے۔" });
+    }
+
     return res.status(200).json({ isAllowed: true });
   } catch (error) {
-    return res.status(500).json({ isAllowed: false });
+    return res.status(500).json({ isAllowed: false, message: "سرور ایرر" });
   }
 });
 
