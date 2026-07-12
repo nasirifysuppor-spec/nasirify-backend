@@ -2,7 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const dns = require('dns');
 const axios = require('axios');
+const admin = require('firebase-admin'); // Firebase Admin shamil kiya
 require('dotenv').config();
+
+// Firebase initialize
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault()
+  });
+}
+const db = admin.firestore();
 
 // IPv4 ko tarjeeh dene ke liye
 dns.setDefaultResultOrder('ipv4first');
@@ -57,12 +66,11 @@ app.post('/api/send-otp', async (req, res) => {
   
   otpStore[normalizedEmail] = {
     otp: otpCode,
-    expiresAt: Date.now() + 5 * 60 * 1000, // 5 Minutes
+    expiresAt: Date.now() + 5 * 60 * 1000,
     attempts: 0,
     deviceId: currentDevice
   };
 
-  // 🔄 OPTIMIZATION: 5 mint baad memory se automatic data delete karne ke liye clean-up timer
   setTimeout(() => {
     if (otpStore[normalizedEmail] && otpStore[normalizedEmail].otp === otpCode) {
       delete otpStore[normalizedEmail];
@@ -80,7 +88,7 @@ app.post('/api/send-otp', async (req, res) => {
     template_id: process.env.EMAILJS_TEMPLATE_ID,
     user_id: process.env.EMAILJS_PUBLIC_KEY, 
     template_params: {
-      email: normalizedEmail,       
+      email: normalizedEmail,        
       passcode: otpCode,            
       user_name: name || 'Nasirify User',
       time: "5 Minutes"             
@@ -128,13 +136,11 @@ app.post('/api/verify-otp', async (req, res) => {
 
   const session = otpStore[userEmail];
 
-  // 1. Expiry Check
   if (Date.now() > session.expiresAt) {
     delete otpStore[userEmail];
     return res.status(400).json({ success: false, message: "او ٹی پی کوڈ کی مدت ختم ہو چکی ہے" });
   }
 
-  // 2. Brute Force Check (Max 3 attempts)
   if (session.attempts >= 3) {
     delete otpStore[userEmail];
     console.log(`🚨 [ALERT] Brute-force blocked for: ${userEmail}`);
@@ -142,7 +148,6 @@ app.post('/api/verify-otp', async (req, res) => {
     return res.status(429).json({ success: false, message: "بار بار غلط کوڈ درج کرنے کی وجہ سے آپ کا سیشن بلاک کر دیا گیا ہے۔" });
   }
 
-  // 3. Device Security Match
   if (session.deviceId !== currentDevice) {
     console.log(`🚨 [ALERT] Device Mismatch detected for ${userEmail}!`);
     await sendAdminAlert("SUSPICIOUS LOGIN", `User ${userEmail} requested OTP from device [${session.deviceId}] but is verifying from device [${currentDevice}].`);
@@ -152,9 +157,8 @@ app.post('/api/verify-otp', async (req, res) => {
     });
   }
 
-  // 4. Verification Match Logic
   if (otpEnteredByUser.toString().trim() === session.otp.toString().trim()) {
-    delete otpStore[userEmail]; // Instantly clear from memory to prevent replay attacks
+    delete otpStore[userEmail];
     console.log(`✅ User ${userEmail} verified on device ${currentDevice}`);
     return res.status(200).json({ success: true, message: "Verified!" });
   } else {
@@ -167,6 +171,19 @@ app.post('/api/verify-otp', async (req, res) => {
       message: `غلط او ٹی پی کوڈ۔ باقی کوششیں: ${remaining}`,
       remainingAttempts: remaining
     });
+  }
+});
+
+// 🛡️ Naya Security Check Endpoint (Yahan add kiya gaya hai)
+app.post('/api/check-security', async (req, res) => {
+  const { deviceId, email } = req.body;
+  try {
+    const q = db.collection("users").where("deviceId", "==", deviceId).limit(1);
+    const snapshot = await q.get();
+    if (!snapshot.empty) return res.status(200).json({ isAllowed: false, message: "اس ڈیوائس پر اکاؤنٹ موجود ہے۔" });
+    return res.status(200).json({ isAllowed: true });
+  } catch (error) {
+    return res.status(500).json({ isAllowed: false });
   }
 });
 
