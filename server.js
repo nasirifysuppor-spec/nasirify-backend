@@ -5,10 +5,9 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 require('dotenv').config();
 
-// Firebase initialization (Railway aur Local dono ke liye safe)
+// Firebase initialization
 if (!admin.apps.length) {
   try {
-    // Agar environment variables set hain to unka use karein
     if (process.env.FIREBASE_PROJECT_ID) {
       admin.initializeApp({
         credential: admin.credential.cert({
@@ -18,7 +17,6 @@ if (!admin.apps.length) {
         })
       });
     } else {
-      // Local development ke liye default
       admin.initializeApp({
         credential: admin.credential.applicationDefault()
       });
