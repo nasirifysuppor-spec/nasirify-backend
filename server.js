@@ -16,16 +16,20 @@ if (!admin.apps.length) {
           privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined
         })
       });
+      console.log("✅ Firebase initialized with environment variables.");
     } else {
       admin.initializeApp({
         credential: admin.credential.applicationDefault()
       });
+      console.log("✅ Firebase initialized with default credentials.");
     }
   } catch (error) {
     console.error("❌ Firebase Initialization Error:", error);
   }
 }
-const db = admin.firestore();
+
+// 🛡️ [UPDATE] Guard laga diya hai taake agar init fail ho to server crash na ho
+const db = admin.apps.length ? admin.firestore() : null;
 
 // IPv4 ko tarjeeh dene ke liye
 dns.setDefaultResultOrder('ipv4first');
@@ -191,6 +195,9 @@ app.post('/api/verify-otp', async (req, res) => {
 // 🛡️ Security Check Endpoint
 app.post('/api/check-security', async (req, res) => {
   const { deviceId, email } = req.body;
+  // [UPDATE] Check if db is initialized before usage
+  if (!db) return res.status(500).json({ isAllowed: false, message: "DB Error" });
+  
   try {
     const q = db.collection("users").where("deviceId", "==", deviceId).limit(1);
     const snapshot = await q.get();
