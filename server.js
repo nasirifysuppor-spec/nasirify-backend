@@ -3,6 +3,8 @@ const cors = require('cors');
 const dns = require('dns');
 const axios = require('axios');
 const admin = require('firebase-admin');
+const helmet = require('helmet'); // Security headers
+const rateLimit = require('express-rate-limit'); // Rate limiting
 require('dotenv').config();
 
 // Firebase initialization
@@ -28,13 +30,20 @@ if (!admin.apps.length) {
   }
 }
 
-// 🛡️ [UPDATE] Guard laga diya hai taake agar init fail ho to server crash na ho
 const db = admin.apps.length ? admin.firestore() : null;
 
-// IPv4 ko tarjeeh dene ke liye
 dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
+
+// 🛡️ [SECURITY MIDDLEWARES]
+app.use(helmet()); // Basic security headers
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { success: false, message: "Too many requests, please try again later." }
+});
+app.use(limiter);
 
 // CORS Configuration
 app.use(cors({
