@@ -45,11 +45,12 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// CORS Configuration
+// 🔄 پُرانے CORS کو اس سے تبدیل کریں:
 app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: true, // یہ ریکویسٹ بھیجنے والے اوریجن کو آٹو الاؤ کرے گا
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-app-secret'], // x-app-secret کو یہاں لازمی شامل کریں
+  credentials: true
 }));
 
 app.use(express.json());
