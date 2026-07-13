@@ -54,7 +54,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// Server.js mein yahan add karein
 app.use((req, res, next) => {
   const secretKey = req.headers['x-app-secret'];
   
@@ -93,14 +92,64 @@ async function sendAdminAlert(subject, details) {
   }
 }
 
-// 1️⃣ OTP Generate & Send API
+// 1️⃣ OTP Generate & Send API (Updated with 4 OTPs per Device/Day Limit)
 app.post('/api/send-otp', async (req, res) => {
   const { email, name, deviceId } = req.body; 
   if (!email) return res.status(400).json({ error: "ای میل درج کرنا ضروری ہے" });
 
-  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-  const normalizedEmail = email.toLowerCase().trim();
   const currentDevice = deviceId || "unknown_device";
+  const normalizedEmail = email.toLowerCase().trim();
+
+  // 🔄 [NEW FEATURE] Device Rate Limiting (Max 4 OTPs per 24 hours)
+  if (db && currentDevice !== "unknown_device") {
+    try {
+      const deviceOtpRef = db.collection("device_otp_limits").doc(currentDevice);
+      const deviceOtpSnap = await deviceOtpRef.get();
+      const now = Date.now();
+      const oneDayInMs = 24 * 60 * 60 * 1000;
+
+      if (deviceOtpSnap.exists) {
+        const data = deviceOtpSnap.data();
+        
+        // Agar aakhri OTP ko 24 ghante guzar chuke hain, to reset karein
+        if (now - data.firstAttemptAt > oneDayInMs) {
+          await deviceOtpRef.set({
+            count: 1,
+            firstAttemptAt: now,
+            lastAttemptAt: now
+          });
+        } else {
+          // Agar 24 ghante ke andar 4 se zyada requests hain
+          if (data.count >= 4) {
+            const timeLeft = Math.ceil((data.firstAttemptAt + oneDayInMs - now) / (60 * 60 * 1000));
+            return res.status(429).json({ 
+              success: false, 
+              message: `سیکیورٹی الرٹ: آپ اس ڈیوائس پر 24 گھنٹوں میں صرف 4 بار او ٹی پی منگوا سکتے ہیں۔ براہ کرم ${timeLeft} گھنٹے بعد کوشش کریں۔` 
+            });
+          }
+          
+          // Count barhaein
+          await deviceOtpRef.update({
+            count: data.count + 1,
+            lastAttemptAt: now
+          });
+        }
+      } else {
+        // Pehli entry create karein
+        await deviceOtpRef.set({
+          count: 1,
+          firstAttemptAt: now,
+          lastAttemptAt: now
+        });
+      }
+    } catch (dbError) {
+      console.error("❌ Device OTP Limit DB Error:", dbError.message);
+      // DB fail hone par safe-side ke liye check bypass kar rahe hain taaki genuine users block na hon
+    }
+  }
+
+  // OTP Generation Logic
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
   
   otpStore[normalizedEmail] = {
     otp: otpCode,
