@@ -146,7 +146,7 @@ app.post('/api/send-otp', async (req, res) => {
   }
 });
 
-// 2️⃣ OTP Verification API
+// 2️⃣ OTP Verification API (Database Integrated)
 app.post('/api/verify-otp', async (req, res) => {
   const { email, otpEnteredByUser, deviceId } = req.body;
   
@@ -157,47 +157,72 @@ app.post('/api/verify-otp', async (req, res) => {
   const userEmail = email.toLowerCase().trim();
   const currentDevice = deviceId || "unknown_device";
 
-  if (!otpStore[userEmail]) {
-    return res.status(400).json({ success: false, message: "پہلے او ٹی پی کوڈ کی درخواست کریں یا کوڈ کی مدت ختم ہو چکی ہے" });
-  }
-
-  const session = otpStore[userEmail];
-
-  if (Date.now() > session.expiresAt) {
-    delete otpStore[userEmail];
-    return res.status(400).json({ success: false, message: "او ٹی پی کوڈ کی مدت ختم ہو چکی ہے" });
-  }
-
-  if (session.attempts >= 3) {
-    delete otpStore[userEmail];
-    console.log(`🚨 [ALERT] Brute-force blocked for: ${userEmail}`);
-    await sendAdminAlert("BRUTE FORCE WARNING", `User ${userEmail} tried to brute-force OTP multiple times.`);
-    return res.status(429).json({ success: false, message: "بار بار غلط کوڈ درج کرنے کی وجہ سے آپ کا سیشن بلاک کر دیا گیا ہے۔" });
-  }
-
-  if (session.deviceId !== currentDevice) {
-    console.log(`🚨 [ALERT] Device Mismatch detected for ${userEmail}!`);
-    await sendAdminAlert("SUSPICIOUS LOGIN", `User ${userEmail} requested OTP from device [${session.deviceId}] but is verifying from device [${currentDevice}].`);
-    return res.status(403).json({ 
-      success: false, 
-      message: "سیکیورٹی الرٹ: ڈیوائس تبدیل پائی گئی ہے۔ لاگ ان کی اجازت نہیں ہے۔" 
-    });
-  }
-
-  if (otpEnteredByUser.toString().trim() === session.otp.toString().trim()) {
-    delete otpStore[userEmail];
-    console.log(`✅ User ${userEmail} verified on device ${currentDevice}`);
-    return res.status(200).json({ success: true, message: "Verified!" });
-  } else {
-    session.attempts += 1;
-    const remaining = 3 - session.attempts;
-    console.log(`⚠️ Invalid OTP for ${userEmail}. Remaining attempts: ${remaining}`);
+  try {
+    // 1. Check: Kya user DB mein permanent block hai?
+    const userRef = db.collection("users").where("email", "==", userEmail);
+    const userSnap = await userRef.get();
     
-    return res.status(400).json({ 
-      success: false, 
-      message: `غلط او ٹی پی کوڈ۔ باقی کوششیں: ${remaining}`,
-      remainingAttempts: remaining
-    });
+    if (!userSnap.empty) {
+      const userData = userSnap.docs[0].data();
+      if (userData.blockedUntil && Date.now() < userData.blockedUntil) {
+        return res.status(429).json({ 
+          success: false, 
+          message: "بار بار غلط کوششوں کی وجہ سے آپ کا اکاؤنٹ 24 گھنٹے کے لیے بلاک ہے۔" 
+        });
+      }
+    }
+
+    // 2. Memory check
+    if (!otpStore[userEmail]) {
+      return res.status(400).json({ success: false, message: "کوڈ کی مدت ختم ہو چکی ہے، دوبارہ درخواست کریں۔" });
+    }
+
+    const session = otpStore[userEmail];
+
+    // Expiry Check
+    if (Date.now() > session.expiresAt) {
+      delete otpStore[userEmail];
+      return res.status(400).json({ success: false, message: "او ٹی پی کوڈ کی مدت ختم ہو چکی ہے" });
+    }
+
+    // Device Mismatch
+    if (session.deviceId !== currentDevice) {
+      await sendAdminAlert("SUSPICIOUS LOGIN", `User ${userEmail} device mismatch. Attempting from ${currentDevice}.`);
+      return res.status(403).json({ success: false, message: "سیکیورٹی الرٹ: ڈیوائس تبدیل پائی گئی ہے۔" });
+    }
+
+    // 3. Logic: OTP Check
+    if (otpEnteredByUser.toString().trim() === session.otp.toString().trim()) {
+      delete otpStore[userEmail];
+      // Success: Reset block if any
+      if (!userSnap.empty) {
+        await userSnap.docs[0].ref.update({ blockedUntil: null });
+      }
+      return res.status(200).json({ success: true, message: "Verified!" });
+    } else {
+      session.attempts += 1;
+      
+      // 4. Block Logic: 4 attempts full?
+      if (session.attempts >= 4) {
+        if (!userSnap.empty) {
+          const oneDay = 24 * 60 * 60 * 1000;
+          await userSnap.docs[0].ref.update({ blockedUntil: Date.now() + oneDay });
+        }
+        delete otpStore[userEmail];
+        await sendAdminAlert("BRUTE FORCE WARNING", `User ${userEmail} blocked for 24 hours.`);
+        return res.status(429).json({ success: false, message: "4 غلط کوششیں۔ اکاؤنٹ 24 گھنٹے کے لیے بلاک کر دیا گیا ہے۔" });
+      }
+
+      const remaining = 4 - session.attempts;
+      return res.status(400).json({ 
+        success: false, 
+        message: `غلط او ٹی پی کوڈ۔ باقی کوششیں: ${remaining}`,
+        remainingAttempts: remaining
+      });
+    }
+  } catch (error) {
+    console.error("Verification Error:", error);
+    return res.status(500).json({ success: false, message: "سرور ایرر" });
   }
 });
 
