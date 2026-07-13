@@ -150,8 +150,11 @@ app.post('/api/send-otp', async (req, res) => {
   }
 
   // OTP Generation Logic
+// OTP Generation Logic
   const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
   
+  // 🔄 OTP Store میں 20 سیکنڈ کا کول ڈاؤن ہینڈل کرنے کے لیے timestamp شامل کر سکتے ہیں 
+  // مگر ہم نے DB میں پہلے ہی lastAttemptAt اپ ڈیٹ کر دیا ہے۔
   otpStore[normalizedEmail] = {
     otp: otpCode,
     expiresAt: Date.now() + 5 * 60 * 1000,
@@ -159,6 +162,7 @@ app.post('/api/send-otp', async (req, res) => {
     deviceId: currentDevice
   };
 
+  // 5 منٹ بعد میموری کلین اپ
   setTimeout(() => {
     if (otpStore[normalizedEmail] && otpStore[normalizedEmail].otp === otpCode) {
       delete otpStore[normalizedEmail];
@@ -176,10 +180,10 @@ app.post('/api/send-otp', async (req, res) => {
     template_id: process.env.EMAILJS_TEMPLATE_ID,
     user_id: process.env.EMAILJS_PUBLIC_KEY, 
     template_params: {
-      email: normalizedEmail,        
-      passcode: otpCode,            
+      email: normalizedEmail,          
+      passcode: otpCode,             
       user_name: name || 'Nasirify User',
-      time: "5 Minutes"             
+      time: "5 Minutes"              
     }
   };
 
@@ -190,12 +194,18 @@ app.post('/api/send-otp', async (req, res) => {
 
     if (response.status === 200) {
       console.log(`🚀 OTP sent successfully via EmailJS to ${normalizedEmail}`);
-      return res.status(200).json({ success: true, message: "OTP sent via EmailJS!" });
+      return res.status(200).json({ 
+        success: true, 
+        message: "OTP کامیابی سے بھیج دیا گیا ہے!" 
+      });
     } else {
-      throw new Error(`EmailJS responded with status: ${response.status}`);
+      throw new Error(`EmailJS status: ${response.status}`);
     }
 
   } catch (error) {
+    // اگر ایرر آئے تو ہم OTP اسٹور سے ہٹا دیتے ہیں تاکہ دوبارہ فوری کوشش ممکن ہو سکے
+    delete otpStore[normalizedEmail];
+    
     console.error("❌ EmailJS Error Details:", error.response ? error.response.data : error.message);
     
     if (process.env.NODE_ENV === 'development') {
@@ -203,7 +213,10 @@ app.post('/api/send-otp', async (req, res) => {
       return res.status(200).json({ success: true, message: "OTP generated (Check server logs)!" });
     }
     
-    return res.status(500).json({ success: false, message: "ای میل سروس میں خرابی ہے۔ براہ کرم دوبارہ کوشش کریں۔" });
+    return res.status(500).json({ 
+      success: false, 
+      message: "ای میل سروس میں خرابی ہے۔ براہ کرم کچھ سیکنڈز بعد دوبارہ کوشش کریں۔" 
+    });
   }
 });
 
