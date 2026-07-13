@@ -54,6 +54,17 @@ app.use(cors({
 
 app.use(express.json());
 
+// Server.js mein yahan add karein
+app.use((req, res, next) => {
+  const secretKey = req.headers['x-app-secret'];
+  
+  if (!secretKey || secretKey !== process.env.MY_SECRET_APP_KEY) {
+    console.warn(`❌ Unauthorized access attempt!`);
+    return res.status(401).json({ success: false, message: "Unauthorized access!" });
+  }
+  next(); 
+});
+
 // Temporary OTP Storage
 const otpStore = {};
 
