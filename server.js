@@ -301,9 +301,8 @@ app.post('/api/verify-otp', async (req, res) => {
 });
 
 // 🛡️ Security Check Endpoint (Updated for Auto-Blocking)
-// 🛡️ Security Check Endpoint (Updated for Role-based Multi-Account Logic)
 app.post('/api/check-security', async (req, res) => {
-  const { deviceId, email, role } = req.body; // Frontend se 'role' (buyer/seller) bhejna zaroori hai
+  const { deviceId, email } = req.body;
   if (!db) return res.status(500).json({ isAllowed: false, message: "DB Error" });
   
   try {
@@ -317,38 +316,42 @@ app.post('/api/check-security', async (req, res) => {
       return res.status(403).json({ isAllowed: false, message: "سیکیورٹی الرٹ: اس ڈیوائس پر پابندی عائد ہے۔" });
     }
 
-    // 2. Device par mojood accounts check karein
-    const deviceSnapshot = await db.collection("users").where("deviceId", "==", deviceId).get();
-    
-    let existingRoles = [];
-    deviceSnapshot.forEach(doc => {
-      existingRoles.push(doc.data().role);
-    });
-
-    // 3. Logic: Check if registration is allowed
-    // Agar device par pehle se 'buyer' AND 'seller' dono hain -> Block
-    if (existingRoles.includes('buyer') && existingRoles.includes('seller')) {
-      return res.status(403).json({ 
-        isAllowed: false, 
-        message: "اس ڈیوائس پر پہلے سے ہی ایک Buyer اور ایک Seller اکاؤنٹ موجود ہے۔ مزید اکاؤنٹ بنانا ممکن نہیں۔" 
-      });
-    }
-
-    // Agar user wahi role dobara banane ki koshish kar raha hai jo pehle se hai
-    if (existingRoles.includes(role)) {
-      return res.status(403).json({ 
-        isAllowed: false, 
-        message: `اس ڈیوائس پر پہلے سے ایک ${role} اکاؤنٹ موجود ہے۔` 
-      });
-    }
-
-    // 4. Duplicate Email Check
+    // 2. Duplicate Check (Device or Email)
+    const deviceSnapshot = await db.collection("users").where("deviceId", "==", deviceId).limit(1).get();
     const emailSnapshot = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
-    if (!emailSnapshot.empty) {
-      return res.status(403).json({ isAllowed: false, message: "یہ ای میل پہلے سے رجسٹرڈ ہے۔" });
+
+    if (!deviceSnapshot.empty || !emailSnapshot.empty) {
+      // Asal account ki maloomat nikalna
+      const existingAccount = !deviceSnapshot.empty ? deviceSnapshot.docs[0].data() : emailSnapshot.docs[0].data();
+      
+      // Attempt count increment
+      const currentCount = attemptSnap.exists ? (attemptSnap.data().count || 0) : 0;
+      const newCount = currentCount + 1;
+
+      // 3. Attempt record save karna
+      await attemptRef.set({
+        count: newCount,
+        isBanned: newCount >= 3, // 3 koshishon par auto-block
+        lastAttempt: new Date().toISOString(),
+        attemptedEmail: normalizedEmail, // Jo user ne abhi daali
+        existingAccountEmail: existingAccount.email, // Asal registered email
+        existingAccountName: existingAccount.name
+      }, { merge: true });
+
+      if (newCount >= 3) {
+        return res.status(403).json({ 
+          isAllowed: false, 
+          message: "بار بار ملٹیپل اکاؤنٹ بنانے کی کوشش پر آپ کو مستقل بلاک کر دیا گیا ہے۔" 
+        });
+      }
+
+      return res.status(200).json({ 
+        isAllowed: false, 
+        message: `یہ ڈیوائس یا ای میل پہلے سے رجسٹرڈ ہے۔ کوششیں باقی: ${3 - newCount}` 
+      });
     }
 
-    // 5. Banned list check (Static)
+    // 4. Banned list check (Static)
     const bannedRef = await db.collection("banned_devices").doc(deviceId).get();
     if (bannedRef.exists) return res.status(403).json({ isAllowed: false, message: "ڈیوائس بلاک ہے۔" });
 
