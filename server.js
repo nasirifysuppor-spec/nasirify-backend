@@ -45,11 +45,10 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// 🔄 پُرانے CORS کو اس سے تبدیل کریں:
 app.use(cors({
-  origin: true, // یہ ریکویسٹ بھیجنے والے اوریجن کو آٹو الاؤ کرے گا
+  origin: true, 
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-app-secret'], // x-app-secret کو یہاں لازمی شامل کریں
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-app-secret'], 
   credentials: true
 }));
 
@@ -67,6 +66,35 @@ app.use((req, res, next) => {
 
 // Temporary OTP Storage
 const otpStore = {};
+
+// 🔔 [NEW] Expo Push Notification Helper Function
+async function sendPushNotification(pushToken, title, body, dataPayload = {}) {
+  if (!pushToken || !pushToken.startsWith('ExponentPushToken')) {
+    console.log("⚠️ Push Token is invalid or not found. Skipping push notification.");
+    return;
+  }
+
+  const message = {
+    to: pushToken,
+    sound: 'default',
+    title: title,
+    body: body,
+    data: dataPayload,
+  };
+
+  try {
+    const response = await axios.post('https://exp.host/--/api/v2/push/send', message, {
+      headers: {
+        'Accept': 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      }
+    });
+    console.log("🚀 [PUSH] Expo push notification sent successfully:", response.data);
+  } catch (error) {
+    console.error("❌ [PUSH] Failed to send Expo push notification:", error.message);
+  }
+}
 
 // 🔴 Admin Security Alert Function
 async function sendAdminAlert(subject, details) {
@@ -101,7 +129,7 @@ app.post('/api/send-otp', async (req, res) => {
   const currentDevice = deviceId || "unknown_device";
   const normalizedEmail = email.toLowerCase().trim();
 
-  // 🔄 [NEW FEATURE] Device Rate Limiting (Max 4 OTPs per 24 hours)
+  // 🔄 Device Rate Limiting (Max 4 OTPs per 24 hours)
   if (db && currentDevice !== "unknown_device") {
     try {
       const deviceOtpRef = db.collection("device_otp_limits").doc(currentDevice);
@@ -112,7 +140,6 @@ app.post('/api/send-otp', async (req, res) => {
       if (deviceOtpSnap.exists) {
         const data = deviceOtpSnap.data();
         
-        // Agar aakhri OTP ko 24 ghante guzar chuke hain, to reset karein
         if (now - data.firstAttemptAt > oneDayInMs) {
           await deviceOtpRef.set({
             count: 1,
@@ -120,7 +147,6 @@ app.post('/api/send-otp', async (req, res) => {
             lastAttemptAt: now
           });
         } else {
-          // Agar 24 ghante ke andar 4 se zyada requests hain
           if (data.count >= 4) {
             const timeLeft = Math.ceil((data.firstAttemptAt + oneDayInMs - now) / (60 * 60 * 1000));
             return res.status(429).json({ 
@@ -129,14 +155,12 @@ app.post('/api/send-otp', async (req, res) => {
             });
           }
           
-          // Count barhaein
           await deviceOtpRef.update({
             count: data.count + 1,
             lastAttemptAt: now
           });
         }
       } else {
-        // Pehli entry create karein
         await deviceOtpRef.set({
           count: 1,
           firstAttemptAt: now,
@@ -145,16 +169,11 @@ app.post('/api/send-otp', async (req, res) => {
       }
     } catch (dbError) {
       console.error("❌ Device OTP Limit DB Error:", dbError.message);
-      // DB fail hone par safe-side ke liye check bypass kar rahe hain taaki genuine users block na hon
     }
   }
 
-  // OTP Generation Logic
-// OTP Generation Logic
   const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
   
-  // 🔄 OTP Store میں 20 سیکنڈ کا کول ڈاؤن ہینڈل کرنے کے لیے timestamp شامل کر سکتے ہیں 
-  // مگر ہم نے DB میں پہلے ہی lastAttemptAt اپ ڈیٹ کر دیا ہے۔
   otpStore[normalizedEmail] = {
     otp: otpCode,
     expiresAt: Date.now() + 5 * 60 * 1000,
@@ -162,7 +181,6 @@ app.post('/api/send-otp', async (req, res) => {
     deviceId: currentDevice
   };
 
-  // 5 منٹ بعد میموری کلین اپ
   setTimeout(() => {
     if (otpStore[normalizedEmail] && otpStore[normalizedEmail].otp === otpCode) {
       delete otpStore[normalizedEmail];
@@ -203,7 +221,6 @@ app.post('/api/send-otp', async (req, res) => {
     }
 
   } catch (error) {
-    // اگر ایرر آئے تو ہم OTP اسٹور سے ہٹا دیتے ہیں تاکہ دوبارہ فوری کوشش ممکن ہو سکے
     delete otpStore[normalizedEmail];
     
     console.error("❌ EmailJS Error Details:", error.response ? error.response.data : error.message);
@@ -232,12 +249,15 @@ app.post('/api/verify-otp', async (req, res) => {
   const currentDevice = deviceId || "unknown_device";
 
   try {
-    // 1. Check: Kya user DB mein permanent block hai?
     const userRef = db.collection("users").where("email", "==", userEmail);
     const userSnap = await userRef.get();
-    
+    let userData = null;
+    let pushToken = null;
+
     if (!userSnap.empty) {
-      const userData = userSnap.docs[0].data();
+      userData = userSnap.docs[0].data();
+      pushToken = userData.pushToken; // 👈 فائر بیس سے یوزر کا محفوظ شدہ پش ٹوکن نکالیں
+
       if (userData.blockedUntil && Date.now() < userData.blockedUntil) {
         return res.status(429).json({ 
           success: false, 
@@ -246,37 +266,50 @@ app.post('/api/verify-otp', async (req, res) => {
       }
     }
 
-    // 2. Memory check
     if (!otpStore[userEmail]) {
       return res.status(400).json({ success: false, message: "کوڈ کی مدت ختم ہو چکی ہے، دوبارہ درخواست کریں۔" });
     }
 
     const session = otpStore[userEmail];
 
-    // Expiry Check
     if (Date.now() > session.expiresAt) {
       delete otpStore[userEmail];
       return res.status(400).json({ success: false, message: "او ٹی پی کوڈ کی مدت ختم ہو چکی ہے" });
     }
 
-    // Device Mismatch
+    // 🔔 ڈیوائس تبدیل ہونے پر یوزر کے پرانے رجسٹرڈ ٹوکن پر پش نوٹیفکیشن بھیجیں
     if (session.deviceId !== currentDevice) {
       await sendAdminAlert("SUSPICIOUS LOGIN", `User ${userEmail} device mismatch. Attempting from ${currentDevice}.`);
+      
+      if (pushToken) {
+        await sendPushNotification(
+          pushToken,
+          "🚨 مشکوک لاگ ان کی کوشش!",
+          `کسی نے دوسری ڈیوائس (${currentDevice}) سے آپ کے اکاؤنٹ میں لاگ ان کرنے کی کوشش کی ہے۔`
+        );
+      }
       return res.status(403).json({ success: false, message: "سیکیورٹی الرٹ: ڈیوائس تبدیل پائی گئی ہے۔" });
     }
 
-    // 3. Logic: OTP Check
     if (otpEnteredByUser.toString().trim() === session.otp.toString().trim()) {
       delete otpStore[userEmail];
-      // Success: Reset block if any
+      
       if (!userSnap.empty) {
         await userSnap.docs[0].ref.update({ blockedUntil: null });
+        
+        // 🔔 لاگ ان کامیاب ہونے پر پش نوٹیفکیشن بھیجیں
+        if (pushToken) {
+          await sendPushNotification(
+            pushToken,
+            "🔓 کامیاب لاگ ان!",
+            "آپ کا اکاؤنٹ کامیابی سے لاگ ان ہو گیا ہے۔"
+          );
+        }
       }
       return res.status(200).json({ success: true, message: "Verified!" });
     } else {
       session.attempts += 1;
       
-      // 4. Block Logic: 4 attempts full?
       if (session.attempts >= 4) {
         if (!userSnap.empty) {
           const oneDay = 24 * 60 * 60 * 1000;
@@ -284,6 +317,16 @@ app.post('/api/verify-otp', async (req, res) => {
         }
         delete otpStore[userEmail];
         await sendAdminAlert("BRUTE FORCE WARNING", `User ${userEmail} blocked for 24 hours.`);
+        
+        // 🔔 بار بار غلط کوشش پر یوزر کو الرٹ بھیجیں
+        if (pushToken) {
+          await sendPushNotification(
+            pushToken,
+            "⚠️ سیکیورٹی وارننگ: اکاؤنٹ بلاک!",
+            "غلط او ٹی پی کی کوششوں کی وجہ سے آپ کا اکاؤنٹ 24 گھنٹے کے لیے بلاک کر دیا گیا ہے۔"
+          );
+        }
+
         return res.status(429).json({ success: false, message: "4 غلط کوششیں۔ اکاؤنٹ 24 گھنٹے کے لیے بلاک کر دیا گیا ہے۔" });
       }
 
@@ -308,7 +351,6 @@ app.post('/api/check-security', async (req, res) => {
   try {
     const normalizedEmail = email.toLowerCase().trim();
 
-    // 1. Check: Kya device pehle se BANNED hai?
     const attemptRef = db.collection("signup_attempts").doc(deviceId);
     const attemptSnap = await attemptRef.get();
     
@@ -316,27 +358,33 @@ app.post('/api/check-security', async (req, res) => {
       return res.status(403).json({ isAllowed: false, message: "سیکیورٹی الرٹ: اس ڈیوائس پر پابندی عائد ہے۔" });
     }
 
-    // 2. Duplicate Check (Device or Email)
     const deviceSnapshot = await db.collection("users").where("deviceId", "==", deviceId).limit(1).get();
     const emailSnapshot = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
 
     if (!deviceSnapshot.empty || !emailSnapshot.empty) {
-      // Asal account ki maloomat nikalna
       const existingAccount = !deviceSnapshot.empty ? deviceSnapshot.docs[0].data() : emailSnapshot.docs[0].data();
+      const pushToken = existingAccount.pushToken; // 👈 اصل اکاؤنٹ کا پش ٹوکن حاصل کریں
       
-      // Attempt count increment
       const currentCount = attemptSnap.exists ? (attemptSnap.data().count || 0) : 0;
       const newCount = currentCount + 1;
 
-      // 3. Attempt record save karna
       await attemptRef.set({
         count: newCount,
-        isBanned: newCount >= 3, // 3 koshishon par auto-block
+        isBanned: newCount >= 3, 
         lastAttempt: new Date().toISOString(),
-        attemptedEmail: normalizedEmail, // Jo user ne abhi daali
-        existingAccountEmail: existingAccount.email, // Asal registered email
+        attemptedEmail: normalizedEmail, 
+        existingAccountEmail: existingAccount.email, 
         existingAccountName: existingAccount.name
       }, { merge: true });
+
+      // 🔔 موبائل پر خودکار پش الرٹ بھیجیں کہ کسی نے نیا اکاؤنٹ بنانے کی کوشش کی ہے
+      if (pushToken) {
+        await sendPushNotification(
+          pushToken,
+          "🛡️ سیکیورٹی وارننگ!",
+          `آپ کی ڈیوائس سے ایک نئے اکاؤنٹ (${normalizedEmail}) کو رجسٹر کرنے کی کوشش کی گئی ہے۔`
+        );
+      }
 
       if (newCount >= 3) {
         return res.status(403).json({ 
@@ -351,7 +399,6 @@ app.post('/api/check-security', async (req, res) => {
       });
     }
 
-    // 4. Banned list check (Static)
     const bannedRef = await db.collection("banned_devices").doc(deviceId).get();
     if (bannedRef.exists) return res.status(403).json({ isAllowed: false, message: "ڈیوائس بلاک ہے۔" });
 
