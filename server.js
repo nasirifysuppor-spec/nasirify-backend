@@ -254,9 +254,12 @@ app.post('/api/verify-otp', async (req, res) => {
     let userData = null;
     let pushToken = null;
 
-    if (!userSnap.empty) {
+if (!userSnap.empty) {
       userData = userSnap.docs[0].data();
-      pushToken = userData.pushToken; // 👈 فائر بیس سے یوزر کا محفوظ شدہ پش ٹوکن نکالیں
+      // پش ٹوکن کو فائر بیس ڈاکومنٹ سے محفوظ طریقے سے حاصل کریں
+      pushToken = userData && userData.pushToken ? userData.pushToken : null; 
+      console.log("ℹ️ [DEBUG] Found Push Token for OTP verification:", pushToken);
+
 
       if (userData.blockedUntil && Date.now() < userData.blockedUntil) {
         return res.status(429).json({ 
@@ -361,9 +364,11 @@ app.post('/api/check-security', async (req, res) => {
     const deviceSnapshot = await db.collection("users").where("deviceId", "==", deviceId).limit(1).get();
     const emailSnapshot = await db.collection("users").where("email", "==", normalizedEmail).limit(1).get();
 
-    if (!deviceSnapshot.empty || !emailSnapshot.empty) {
-      const existingAccount = !deviceSnapshot.empty ? deviceSnapshot.docs[0].data() : emailSnapshot.docs[0].data();
-      const pushToken = existingAccount.pushToken; // 👈 اصل اکاؤنٹ کا پش ٹوکن حاصل کریں
+   if (!deviceSnapshot.empty || !emailSnapshot.empty) {
+      const docSnapshot = !deviceSnapshot.empty ? deviceSnapshot.docs[0] : emailSnapshot.docs[0];
+      const existingAccount = docSnapshot.data();
+      const pushToken = existingAccount && existingAccount.pushToken ? existingAccount.pushToken : null; 
+      console.log("ℹ️ [DEBUG] Found Push Token for security alert:", pushToken);
       
       const currentCount = attemptSnap.exists ? (attemptSnap.data().count || 0) : 0;
       const newCount = currentCount + 1;
