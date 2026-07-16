@@ -414,6 +414,51 @@ app.post('/api/check-security', async (req, res) => {
   }
 });
 
+
+// 🔔 نیا آرڈر نوٹیفیکیشن بھیجنے کی API
+app.post('/api/send-order-notification', async (req, res) => {
+  const { userId, orderTitle, orderDetails } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ success: false, message: "User ID بھیجنا ضروری ہے۔" });
+  }
+
+  try {
+    if (!db) {
+      return res.status(500).json({ success: false, message: "ڈیٹا بیس کنکشن موجود نہیں ہے۔" });
+    }
+
+    // 1. فائر بیس کے 'users' کلیکشن سے اس کسٹمر کا ڈاکومنٹ نکالیں
+    const userDoc = await db.collection("users").doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({ success: false, message: "یوزر ڈیٹا بیس میں نہیں ملا۔" });
+    }
+
+    const userData = userDoc.data();
+    const pushToken = userData.pushToken; // یوزر کا پش ٹوکن حاصل کریں
+
+    if (!pushToken) {
+      return res.status(400).json({ success: false, message: "اس یوزر کا کوئی پش ٹوکن (Push Token) رجسٹرڈ نہیں ہے۔" });
+    }
+
+    // 2. پش نوٹیفکیشن بھیجیں (اوپر بنے ہوئے sendPushNotification ہیلپر فنکشن کے ذریعے)
+    await sendPushNotification(
+      pushToken,
+      orderTitle || "آرڈر الرٹ! 🎉",
+      orderDetails || "آپ کا آرڈر کامیابی سے موصول ہو گیا ہے۔"
+    );
+
+    return res.status(200).json({ success: true, message: "نوٹیفیکیشن کامیابی سے بھیج دیا گیا!" });
+
+  } catch (error) {
+    console.error("❌ Notification Send Error:", error);
+    return res.status(500).json({ success: false, message: "نوٹیفیکیشن بھیجنے میں خرابی پیش آئی۔" });
+  }
+});
+
+
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Security server running smoothly on port ${PORT}`);
