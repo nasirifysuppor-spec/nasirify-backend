@@ -468,13 +468,28 @@ app.post('/api/send-order-notification', async (req, res) => {
 
 app.post('/api/get-signature', (req, res) => {
   const timestamp = Math.round(new Date().getTime() / 1000);
+  
+  // 1. مجاز پری سیٹس کی فہرست (Allowlist)
+  const allowedPresets = ["nasirify-preset", "secure-cnic-upload"];
+  
+  // 2. ریکویسٹ سے پری سیٹ لیں (ڈیفالٹ کے طور پر 'secure-cnic-upload' رکھیں)
+  const requestedPreset = req.body.upload_preset || "secure-cnic-upload";
+
+  // 3. سیکیورٹی چیک: اگر پری سیٹ ہماری فہرست میں نہیں ہے تو اسے مسترد کریں
+  if (!allowedPresets.includes(requestedPreset)) {
+    console.warn(`⚠️ Unauthorized signature attempt for preset: ${requestedPreset}`);
+    return res.status(403).json({ success: false, error: "Invalid or unauthorized upload preset." });
+  }
+
   const params = {
     timestamp: timestamp,
-    upload_preset: req.body.upload_preset || "secure-cnic-upload" 
+    upload_preset: requestedPreset
   };
 
   try {
+    // 4. کلاؤڈ نری کے خفیہ سیکیریٹ کے ساتھ دستخط جنریٹ کریں
     const signature = cloudinary.utils.api_sign_request(params, process.env.CLOUDINARY_API_SECRET);
+    
     res.json({
       signature: signature,
       timestamp: timestamp,
@@ -482,7 +497,7 @@ app.post('/api/get-signature', (req, res) => {
     });
   } catch (error) {
     console.error("❌ Signature error:", error);
-    res.status(500).json({ error: "Failed to generate signature" });
+    res.status(500).json({ success: false, error: "Failed to generate signature" });
   }
 });
 
