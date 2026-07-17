@@ -5,7 +5,16 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 const helmet = require('helmet'); // Security headers
 const rateLimit = require('express-rate-limit'); // Rate limiting
+const cloudinary = require('cloudinary').v2; // Yeh add karein
 require('dotenv').config();
+
+
+// Yeh bhi top par hi add kar dein
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // Firebase initialization
 if (!admin.apps.length) {
@@ -457,7 +466,40 @@ app.post('/api/send-order-notification', async (req, res) => {
   }
 });
 
+app.post('/api/get-signature', (req, res) => {
+  const timestamp = Math.round(new Date().getTime() / 1000);
+  
+  // 1. مجاز پری سیٹس کی فہرست (Allowlist)
+  const allowedPresets = ["nasirify-preset", "secure-cnic-upload"];
+  
+  // 2. ریکویسٹ سے پری سیٹ لیں (ڈیفالٹ کے طور پر 'secure-cnic-upload' رکھیں)
+  const requestedPreset = req.body.upload_preset || "secure-cnic-upload";
 
+  // 3. سیکیورٹی چیک: اگر پری سیٹ ہماری فہرست میں نہیں ہے تو اسے مسترد کریں
+  if (!allowedPresets.includes(requestedPreset)) {
+    console.warn(`⚠️ Unauthorized signature attempt for preset: ${requestedPreset}`);
+    return res.status(403).json({ success: false, error: "Invalid or unauthorized upload preset." });
+  }
+
+  const params = {
+    timestamp: timestamp,
+    upload_preset: requestedPreset
+  };
+
+  try {
+    // 4. کلاؤڈ نری کے خفیہ سیکیریٹ کے ساتھ دستخط جنریٹ کریں
+    const signature = cloudinary.utils.api_sign_request(params, process.env.CLOUDINARY_API_SECRET);
+    
+    res.json({
+      signature: signature,
+      timestamp: timestamp,
+      api_key: process.env.CLOUDINARY_API_KEY
+    });
+  } catch (error) {
+    console.error("❌ Signature error:", error);
+    res.status(500).json({ success: false, error: "Failed to generate signature" });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
