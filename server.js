@@ -5,7 +5,16 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 const helmet = require('helmet'); // Security headers
 const rateLimit = require('express-rate-limit'); // Rate limiting
+const cloudinary = require('cloudinary').v2; // Yeh add karein
 require('dotenv').config();
+
+
+// Yeh bhi top par hi add kar dein
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // Firebase initialization
 if (!admin.apps.length) {
@@ -457,7 +466,25 @@ app.post('/api/send-order-notification', async (req, res) => {
   }
 });
 
+app.post('/api/get-signature', (req, res) => {
+  const timestamp = Math.round(new Date().getTime() / 1000);
+  const params = {
+    timestamp: timestamp,
+    upload_preset: req.body.upload_preset || "secure-cnic-upload" 
+  };
 
+  try {
+    const signature = cloudinary.utils.api_sign_request(params, process.env.CLOUDINARY_API_SECRET);
+    res.json({
+      signature: signature,
+      timestamp: timestamp,
+      api_key: process.env.CLOUDINARY_API_KEY
+    });
+  } catch (error) {
+    console.error("❌ Signature error:", error);
+    res.status(500).json({ error: "Failed to generate signature" });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
